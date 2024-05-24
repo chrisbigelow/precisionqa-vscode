@@ -1,15 +1,18 @@
 import * as vscode from 'vscode';
-import { ChatGPTAPI, ChatGPTConversation } from 'chatgpt';
+import { ChatOpenAI } from "@langchain/openai";
+import { HumanMessage, AIMessage } from "@langchain/core/messages";
+import { ChatMessageHistory } from "langchain/stores/message/in_memory";
 
 
 export function activate(context: vscode.ExtensionContext) {
 	// Get the API session token from the extension's configuration
-	const config = vscode.workspace.getConfiguration('chatgpt');
-	const sessionToken = config.get('sessionToken') as string|undefined;
+	const config = vscode.workspace.getConfiguration('precision-qa');
+	const apiToken = config.get('apiToken') as string|undefined;
 
 	// Create a new ChatGPTViewProvider instance and register it with the extension's context
-	const provider = new ChatGPTViewProvider(context.extensionUri);
-	provider.setSessionToken(sessionToken);
+	const provider = new PrecisionQAViewProvider(context.extensionUri);
+	provider.setTokens(apiToken);  
+	// provider.setTokens(sessionToken, clearanceToken);
 
 	// Put configuration settings into the provider
 	provider.selectedInsideCodeblock = config.get('selectedInsideCodeblock') || false;
@@ -18,7 +21,7 @@ export function activate(context: vscode.ExtensionContext) {
 	provider.timeoutLength = config.get('timeoutLength') || 60;
 
 	context.subscriptions.push(
-		vscode.window.registerWebviewViewProvider(ChatGPTViewProvider.viewType, provider,  {
+		vscode.window.registerWebviewViewProvider(PrecisionQAViewProvider.viewType, provider,  {
 			webviewOptions: { retainContextWhenHidden: true }
 		})
 	);
@@ -27,17 +30,17 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register the commands that can be called from the extension's package.json
 	const commandHandler = (command:string) => {
-		const config = vscode.workspace.getConfiguration('chatgpt');
+		const config = vscode.workspace.getConfiguration('precision-qa');
 		const prompt = config.get(command) as string;
 		provider.search(prompt);
 	};
 
-	const commandAsk = vscode.commands.registerCommand('chatgpt.ask', () => {
+	const commandAsk = vscode.commands.registerCommand('precision-qa.ask', () => {
 		vscode.window.showInputBox({ prompt: 'What do you want to do?' }).then((value) => {
 			provider.search(value);
 		});
 	});
-	const commandConversationId = vscode.commands.registerCommand('chatgpt.conversationId', () => {
+	const commandConversationId = vscode.commands.registerCommand('precision-qa.conversationId', () => {
 		vscode.window.showInputBox({ 
 			prompt: 'Set Conversation ID or delete it to reset the conversation',
 			placeHolder: 'conversationId (leave empty to reset)',
@@ -46,30 +49,24 @@ export function activate(context: vscode.ExtensionContext) {
 			if (!conversationId) {
 				provider.setConversationId();
 			} else {
-				vscode.window.showInputBox({ 
-					prompt: 'Set Parent Message ID',
-					placeHolder: 'messageId (leave empty to reset)',
-					value: provider.getParentMessageId()
-				}).then((messageId) => {
-					provider.setConversationId(conversationId, messageId);
-				});
+				provider.setConversationId(conversationId);
 			}
 		});
 	});
-	const commandExplain = vscode.commands.registerCommand('chatgpt.explain', () => {	
+	const commandExplain = vscode.commands.registerCommand('precision-qa.explain', () => {	
 		commandHandler('promptPrefix.explain');
 	});
-	const commandRefactor = vscode.commands.registerCommand('chatgpt.refactor', () => {
+	const commandRefactor = vscode.commands.registerCommand('precision-qa.refactor', () => {
 		commandHandler('promptPrefix.refactor');
 	});
-	const commandOptimize = vscode.commands.registerCommand('chatgpt.optimize', () => {
+	const commandOptimize = vscode.commands.registerCommand('precision-qa.optimize', () => {
 		commandHandler('promptPrefix.optimize');
 	});
-	const commandProblems = vscode.commands.registerCommand('chatgpt.findProblems', () => {
+	const commandProblems = vscode.commands.registerCommand('precision-qa.findProblems', () => {
 		commandHandler('promptPrefix.findProblems');
 	});
 
-	let commandResetConversation = vscode.commands.registerCommand('chatgpt.resetConversation', () => {
+	let commandResetConversation = vscode.commands.registerCommand('precision-qa.resetConversation', () => {
 		provider.setConversationId();
 	});
 	
@@ -80,93 +77,94 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Change the extension's session token when configuration is changed
 	vscode.workspace.onDidChangeConfiguration((event: vscode.ConfigurationChangeEvent) => {
-		if (event.affectsConfiguration('chatgpt.sessionToken')) {
+		if (event.affectsConfiguration('precision-qa.apiToken')) {
 			// Get the extension's configuration
-			const config = vscode.workspace.getConfiguration('chatgpt');
-			const sessionToken = config.get('sessionToken') as string|undefined;
+			const config = vscode.workspace.getConfiguration('preision-qa');
+			const apiToken = config.get('apiToken') as string|undefined;
 			// add the new token to the provider
-			provider.setSessionToken(sessionToken);
+			provider.setTokens(apiToken);
 
-		} else if (event.affectsConfiguration('chatgpt.selectedInsideCodeblock')) {
-			const config = vscode.workspace.getConfiguration('chatgpt');
+		} else if (event.affectsConfiguration('precision-qa.selectedInsideCodeblock')) {
+			const config = vscode.workspace.getConfiguration('precision-qa');
 			provider.selectedInsideCodeblock = config.get('selectedInsideCodeblock') || false;
 
-		} else if (event.affectsConfiguration('chatgpt.pasteOnClick')) {
-			const config = vscode.workspace.getConfiguration('chatgpt');
+		} else if (event.affectsConfiguration('precision-qa.pasteOnClick')) {
+			const config = vscode.workspace.getConfiguration('precision-qa');
 			provider.pasteOnClick = config.get('pasteOnClick') || false;
 
-		} else if (event.affectsConfiguration('chatgpt.keepConversation')) {
-			const config = vscode.workspace.getConfiguration('chatgpt');
+		} else if (event.affectsConfiguration('precision-qa.keepConversation')) {
+			const config = vscode.workspace.getConfiguration('precision-qa');
 			provider.keepConversation = config.get('keepConversation') || false;
 
-		}else if (event.affectsConfiguration('chatgpt.timeoutLength')) {
-			const config = vscode.workspace.getConfiguration('chatgpt');
+		}else if (event.affectsConfiguration('precision-qa.timeoutLength')) {
+			const config = vscode.workspace.getConfiguration('precision-qa');
 			provider.timeoutLength = config.get('timeoutLength') || 60;
 		}
 });
 }
 
 
-
-
-
-class ChatGPTViewProvider implements vscode.WebviewViewProvider {
-	public static readonly viewType = 'chatgpt.chatView';
+class PrecisionQAViewProvider implements vscode.WebviewViewProvider {
+	public static readonly viewType = 'precision-qa.chatView';
 
 	private _view?: vscode.WebviewView;
 
-	// This variable holds a reference to the ChatGPTAPI instance
-	private _chatGPTAPI?: ChatGPTAPI;
-	private _conversation?: ChatGPTConversation;
+	// This variable holds a reference to the ChatOpenAI instance
+	private _chatOpenAi?: ChatOpenAI;
+	private _conversation?: ChatMessageHistory;
 
 	private _response?: string;
 	private _prompt?: string;
 	private _fullPrompt?: string;
+	private _conversationHistory: string = '';
 
 
 	public selectedInsideCodeblock = false;
 	public pasteOnClick = true;
 	public keepConversation = true;
 	public timeoutLength = 60;
-	private _sessionToken?: string;
+	private _apiToken?: string;
 
 	// In the constructor, we store the URI of the extension
 	constructor(private readonly _extensionUri: vscode.Uri) {
 		
 	}
 	
-	// Set the session token and create a new API instance based on this token
-	public setSessionToken(sessionToken?: string) {
-		this._sessionToken = sessionToken;
+	// Set the session and clearance token and create a new API instance based on these tokens
+	public setTokens(apiToken?: string) {
+		this._apiToken = apiToken;
 		this._newAPI();
 	}
 
-	public setConversationId(conversationId?: string, parentMessageId?: string) {
-		if (!conversationId || !parentMessageId) {
-			this._conversation = this._chatGPTAPI?.getConversation();
-		} else if (conversationId && parentMessageId) {
-			this._conversation = this._chatGPTAPI?.getConversation({conversationId: conversationId, parentMessageId: parentMessageId});
+	public setConversationId(conversationId?: string) {
+		if (!conversationId) {
+			this._conversation = new ChatMessageHistory();
+			this._conversationHistory = '';
+		} else {
+			// Change to load old conversation
+			this._conversation = new ChatMessageHistory();
 		}
 	}
 
 	public getConversationId() {
-		return this._conversation?.conversationId;
-	}
-	public getParentMessageId() {
-		return this._conversation?.parentMessageId;
+		// change this to return the conversation id associated with the ChatMessageHistory
+		return "22";
 	}
 
-	// This private method initializes a new ChatGPTAPI instance, using the session token if it is set
+	// This private method initializes a new chat instance, using the api token if it is set
 	private _newAPI() {
-		if (!this._sessionToken) {
-			console.warn("Session token not set");
-		}else{
-			this._chatGPTAPI = new ChatGPTAPI({
-				sessionToken: this._sessionToken
-			});
-			this._conversation = this._chatGPTAPI.getConversation();
+		if (!this._apiToken) {
+		  console.warn("api token not set");
+		} else {
+		  this._chatOpenAi = new ChatOpenAI({
+			apiKey: this._apiToken,
+			model: "gpt-4o",
+			temperature: 0.2,
+		  });
+		  this._conversation = new ChatMessageHistory();
+		  // this._conversation = this._chatGPTAPI.getConversation();
 		}
-	}
+	  }
 
 	public resolveWebviewView(
 		webviewView: vscode.WebviewView,
@@ -220,14 +218,14 @@ class ChatGPTViewProvider implements vscode.WebviewViewProvider {
 			prompt = '';
 		};
 
-		// Check if the ChatGPTAPI instance is defined
-		if (!this._chatGPTAPI) {
+		// Check if the chatOpenAi instance is defined
+		if (!this._chatOpenAi) {
 			this._newAPI();
 		}
 
 		// focus gpt activity from activity bar
 		if (!this._view) {
-			await vscode.commands.executeCommand('chatgpt.chatView.focus');
+			await vscode.commands.executeCommand('precision-qa.chatView.focus');
 		} else {
 			this._view?.show?.(true);
 		}
@@ -254,8 +252,12 @@ class ChatGPTViewProvider implements vscode.WebviewViewProvider {
 		this._fullPrompt = searchPrompt;
 
 
-		if (!this._chatGPTAPI || !this._conversation) {
-			response = '[ERROR] Please enter an API key in the extension settings';
+		if (!this._conversation) {
+			response = '[ERROR] Conversation not initialized';
+		}
+		else if (!this._chatOpenAi) {
+			console.log("TESTING")
+			response = '[ERROR] Enter an API key in the extension settings';
 		} else {
 			// If successfully signed in
 			console.log("sendMessage");
@@ -264,29 +266,34 @@ class ChatGPTViewProvider implements vscode.WebviewViewProvider {
 			this._view?.webview.postMessage({ type: 'setPrompt', value: this._prompt });
 
 			if (this._view) {
-				this._view.webview.postMessage({ type: 'addResponse', value: '...' });
+				//this._view.webview.postMessage({ type: 'addResponse', value: '...' });
+				this._view.webview.postMessage({ type: 'showSpinner' });
 			}
 
 			let agent;
 			if (this.keepConversation) {
-				agent = this._conversation;
+				// agent = this._conversation;
+				agent = this._chatOpenAi;
 			} else {
-				agent = this._chatGPTAPI;
+				agent = this._chatOpenAi;
 			}
 
 			try {
-				// Send the search prompt to the ChatGPTAPI instance and store the response
-				response = await agent.sendMessage(searchPrompt, {
-					onProgress: (partialResponse) => {
-						if (this._view && this._view.visible) {
-							this._view.webview.postMessage({ type: 'addResponse', value: partialResponse });
-						}
-					},
-					timeoutMs: this.timeoutLength * 1000
-				});
+				// Send the search prompt to the _chatOpenAi instance and store the response
+				let humanMessage = new HumanMessage(searchPrompt);
+				this._conversation.addMessage(humanMessage);
+				let aiMessage = await agent.invoke([humanMessage,]);
+				this._conversation.addMessage(aiMessage);
+				response = aiMessage.content.toString();
 			} catch (e) {
 				console.error(e);
 				response = `[ERROR] ${e}`;
+			} finally {
+				this._view?.webview.postMessage({ type: 'hideSpinner' });
+				this._view?.webview.postMessage({ type: 'addResponse', value: response });
+				// const messages = await this._conversation?.getMessages();
+				this._conversationHistory += `<div class="py-10"><b>Prompt:</b> ${this._prompt}<br/><b>Response:</b> ${response}</div><hr/>`;
+
 			}
 		}
 
@@ -297,16 +304,16 @@ class ChatGPTViewProvider implements vscode.WebviewViewProvider {
 		if (this._view) {
 			this._view.show?.(true);
 			this._view.webview.postMessage({ type: 'addResponse', value: response });
+			this._view.webview.postMessage({ type: 'updateHistory', value: this._conversationHistory });
 		}
 	}
 
 	private _getHtmlForWebview(webview: vscode.Webview) {
-
 		const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'main.js'));
 		const microlightUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'scripts', 'microlight.min.js'));
 		const tailwindUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'scripts', 'showdown.min.js'));
 		const showdownUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'scripts', 'tailwind.min.js'));
-
+	
 		return `<!DOCTYPE html>
 			<html lang="en">
 			<head>
@@ -318,18 +325,49 @@ class ChatGPTViewProvider implements vscode.WebviewViewProvider {
 				<style>
 				.code {
 					white-space : pre;
+				}
+				.prompt-input {
+					margin-top: 10px;
+					margin-bottom: 10px;
+				}
+				.spinner {
+					margin: 16px auto;
+					width: 40px;
+					height: 40px;
+					border: 4px solid rgba(0, 0, 0, 0.1);
+					border-top: 4px solid #cfe500;
+					border-radius: 50%;
+					animation: spin 1s linear infinite;
+				}
+				@keyframes spin {
+					0% { transform: rotate(0deg); }
+					100% { transform: rotate(360deg); }
+				}
+				#prompt, #response {
+					transition: all 0.3s ease;
+				}
+				#history {
+					margin-top: 10px;
+					margin-bottom: 10px;
+				}
+				#send-button {
+					background-color: #cfe500;
+					color: black;
+				}
 				</style>
 			</head>
 			<body>
-				<input class="h-10 w-full text-white bg-stone-700 p-4 text-sm" type="text" id="prompt-input" />
-
-				<div id="response" class="pt-6 text-sm">
+			    <div id="history" class="text-sm"></div>
+				<div id="spinner"></div>
+				<div class="flex items-center spaced">
+					<input class="h-10 w-full text-white bg-stone-700 p-4 text-sm prompt-input" type="text" id="prompt-input" placeholder="Type your prompt"/>
+					<button id="send-button" class="h-10 px-4 text-white text-sm">Send</button>
 				</div>
-
 				<script src="${scriptUri}"></script>
 			</body>
 			</html>`;
 	}
+	
 }
 
 // This method is called when your extension is deactivated
